@@ -12,6 +12,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"os"
@@ -407,7 +409,7 @@ func (s *Server) injectWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 	lines, err := readLines(filepath.Join(s.Cfg.SampleDir, "webhook_orders.jsonl"))
 	if err != nil {
-		internal(w, r, err)
+		sampleErr(w, r, err)
 		return
 	}
 	accepted, dups := 0, 0
@@ -470,7 +472,7 @@ func (s *Server) importSample(w http.ResponseWriter, r *http.Request) {
 	}
 	data, err := os.ReadFile(filepath.Join(s.Cfg.SampleDir, name))
 	if err != nil {
-		writeErr(w, 404, "sample not found")
+		sampleErr(w, r, err)
 		return
 	}
 	s.runImport(w, r, name, data)
@@ -495,6 +497,19 @@ func (s *Server) reset(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, 200, map[string]any{"reset": true, "mock_api": mockReset})
+}
+
+// sampleErr reports a problem reading the bundled sample data clearly.
+func sampleErr(w http.ResponseWriter, r *http.Request, err error) {
+	slog.Error("sample data", "path", r.URL.Path, "err", err)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		writeErr(w, 404, "sample file not found in SAMPLE_DIR")
+	case errors.Is(err, fs.ErrPermission):
+		writeErr(w, 500, "sample file is not readable by the server (permission denied); rebuild the image")
+	default:
+		writeErr(w, 500, "could not read sample file: "+err.Error())
+	}
 }
 
 func readLines(path string) ([][]byte, error) {

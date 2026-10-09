@@ -11,7 +11,8 @@ RUN go build -ldflags="-s -w" -o /out/server ./cmd/server \
 
 FROM scratch
 COPY --from=build /out/ /app/
-COPY sample-data/ /app/sample-data/
+# --chmod: readable by the non-root user even if the files are owner-only on disk
+COPY --chmod=0755 sample-data/ /app/sample-data/
 ENV SAMPLE_DIR=/app/sample-data
 USER 65534:65534
 EXPOSE 8080
