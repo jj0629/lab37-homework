@@ -185,7 +185,7 @@ The sample files contain deliberate traps. This is how each one is handled:
 
 ## Design considerations
 
-**Postgres as the queue.** At 100k requests/day (about 1.2/s on average, with bursts maybe 100× that), a dedicated broker would add an operational dependency without buying anything. The `inbox`/`outbox` tables give durable buffering, idempotency through unique keys, exactly-once *effects* (claim + apply + mark done in one transaction), easy inspection with SQL, and one less moving part. The edge does one indexed insert per request, so bursts land in Postgres instead of being dropped. The [next steps](#next-steps) describe when to swap in Kafka/SQS.
+**Postgres as the queue.** At 100k requests/day (about 1.2/s on average, with bursts maybe 100× that), a dedicated broker would add an operational dependency without buying anything. The `inbox`/`outbox` tables give durable buffering, idempotency through unique keys, exactly-once *effects* (claim + apply + mark done in one transaction), easy inspection with SQL, and one less moving part. The edge does one indexed insert per request, so bursts land in Postgres instead of being dropped. [`NEXT_STEPS.md`](NEXT_STEPS.md) describes when to swap in Kafka/SQS.
 
 **At-least-once in, exactly-once effects.** Every boundary assumes redelivery: inbox keys, `(source, external_id)` uniqueness, monotonic status updates, an idempotency key on robot messages, and enqueue-before-cursor in the poller. Nothing relies on a message arriving exactly once.
 
@@ -212,7 +212,7 @@ The sample files contain deliberate traps. This is how each one is handled:
 |---|---|
 | `POST /api/ingest/webhook` | Webhook edge (object, array or NDJSON) → `202 {accepted, duplicates, rejected[]}` |
 | `POST /api/orders/import` | CSV upload (multipart `file`) → `{new, duplicate, rejected[{line, reason}]}` |
-| `GET /api/orders` | List with filters: `status`, `source`, `kind=realtime\|scheduled`, `needs_review`, `q`, `sort`, `dir`, `page`, `page_size` |
+| `GET /api/orders` | List with filters. `status`, `source` and `kind` take comma-separated values. `flags` (comma-separated, `needs_review` included) matches orders with *any* of them. Different filters combine with AND. Also `q`, `sort`, `dir`, `page`, `page_size` |
 | `GET /api/orders/export.csv` | The same filters, streamed as CSV (one row per order) |
 | `GET /api/orders/{id}` | Order + items + events + robot payload (sent or preview) |
 | `GET /api/orders/{id}/events` | History only |
@@ -252,10 +252,11 @@ Run in a sandbox with the real compose stack (Postgres 16 in Docker):
 
 | | |
 |---|---|
+| ![Filters](docs/screenshots/orders-filters.png) <br> **Filters:** multi-select Status (with live counts), Source, Type and Flags; Reset; everything kept in the URL | ![Needs review](docs/screenshots/orders-needs-review.png) <br> **Needs review alert:** one click filters to the flagged orders |
 | ![Order detail: API order](docs/screenshots/order-api.png) <br> **API order:** item-level upstream statuses, full event history, the robot payload as sent | ![Order detail: ID conflict](docs/screenshots/order-conflict.png) <br> **Webhook UUID collision:** first order kept; the conflicting payload is quarantined and linked |
-| ![Ingestion](docs/screenshots/ingestion.png) <br> **Ingestion:** inject orders, sample CSVs, poller state, time warp, leaders | ![Review queue](docs/screenshots/review.png) <br> **Review queue:** conflicts and rejected orders, with payloads |
-| ![Scheduled order](docs/screenshots/order-scheduled.png) <br> **CSV order:** meal slot passed, so moved to tomorrow and flagged | ![Dark mode](docs/screenshots/orders-dark.png) <br> **Dark theme** (follows the OS, or toggle) |
-| ![Upload toast](docs/screenshots/upload-toast.png) <br> **Re-uploading a CSV:** every row already seen | ![Scheduled filter](docs/screenshots/orders-scheduled.png) <br> **Scheduled orders**, sorted by slot |
+| ![Scheduled order](docs/screenshots/order-scheduled.png) <br> **CSV order:** meal slot passed, so moved to tomorrow and flagged | ![Ingestion](docs/screenshots/ingestion.png) <br> **Ingestion:** inject orders, sample CSVs, poller state, time warp, leaders |
+| ![Review queue](docs/screenshots/review.png) <br> **Review queue:** conflicts and rejected orders, with payloads | ![Upload toast](docs/screenshots/upload-toast.png) <br> **Re-uploading a CSV:** every row already seen |
+| ![Dark mode](docs/screenshots/orders-dark.png) <br> **Dark theme** (follows the OS, or toggle) | ![Mobile](docs/screenshots/orders-mobile.png) <br> **Phone width** |
 
 ---
 
@@ -277,7 +278,8 @@ backend/
   migrations/         SQL schema (embedded, applied on start)
 frontend/
   src/views           Orders, Order detail, Ingestion, Review queue
-  src/components      StatusBadge, StatTile, DataTable, Timeline, JsonViewer, ToastHost
+  src/components      MultiSelect, StatusBadge, DataTable, Timeline, JsonViewer, ToastHost
+  src/filters.ts      URL ↔ filter parsing, selection labels, page size
 sample-data/          the provided files (bundled into the image for the mocks)
 docs/screenshots/
 ```
@@ -286,18 +288,7 @@ docs/screenshots/
 
 ## Next steps
 
-Roughly in priority order:
-
-1. **Auth and tenancy.** Sign webhook requests (HMAC per platform), authenticate the dashboard (OIDC), and add role-based access for admin actions. Remove the demo endpoints (time warp, reset) from production builds.
-2. **Observability.** Prometheus metrics (ingest rate, inbox age and depth, dead-letter rate, dispatch latency, poller lag) with alerts; OpenTelemetry traces from edge to robot ack; a request id carried through events.
-3. **Wake-ups instead of polling.** Use `LISTEN/NOTIFY` so workers react immediately rather than polling every 100–300 ms (latency is already low, but this removes idle queries).
-4. **Review workflow.** Let operators act on review items: merge or replace a conflicting order, apply an item-change request, re-drive a dead letter after a fix. Today they can only be inspected and resolved.
-5. **Menu and pricing service.** The menu catalog is derived from the sample data. A real menu would provide prices for CSV orders, validate items and map item names to robot recipes.
-6. **Robot integration.** A real contract (recipes and stations), robot status callbacks (`assembling → ready`), and capacity-aware dispatch (throttle releases to robot throughput rather than "all due orders now").
-7. **Scaling past one Postgres.** Partition `order_events` and `inbox` by time and archive old rows. If ingest grows by orders of magnitude, put Kafka/SQS in front of the inbox while keeping the same idempotent handlers. Read replicas for the dashboard.
-8. **Kubernetes.** Helm chart, HPA on API CPU and inbox depth, PodDisruptionBudgets, and managed Postgres with PITR.
-9. **Testing.** Integration tests with testcontainers for the worker, poller and leader paths (the checks above were run by hand), frontend component tests, and a soak test at 10× the target rate.
-10. **Data retention and privacy.** Customer names are PII; define retention for payloads in `inbox`, `dead_letter` and event payloads.
+See [`NEXT_STEPS.md`](NEXT_STEPS.md). It covers the planned backend performance work (with measured baseline numbers), the automated test plan, frontend polish and production readiness.
 
 ---
 
