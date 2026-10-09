@@ -1,0 +1,297 @@
+/* Design tokens. Light by default; dark follows the OS unless overridden. */
+:root {
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --surface-2: #f0f2f5;
+  --border: #e2e5ea;
+  --border-strong: #cdd2da;
+  --text: #1b1f27;
+  --text-2: #4b5363;
+  --text-3: #7a8293;
+  --accent: #2f6fde;
+  --accent-hover: #255cc0;
+  --accent-soft: #e8f0fd;
+  --danger: #c93a3a;
+  --danger-soft: #fcebeb;
+  --focus: 0 0 0 3px rgba(47, 111, 222, 0.28);
+  --shadow: 0 1px 2px rgba(16, 24, 40, 0.05), 0 1px 3px rgba(16, 24, 40, 0.06);
+  --shadow-lg: 0 10px 30px rgba(16, 24, 40, 0.14);
+
+  /* status palette: [text, background] */
+  --st-received: #5b6474;
+  --st-received-bg: #eef0f3;
+  --st-scheduled: #6b46c1;
+  --st-scheduled-bg: #f1ecfc;
+  --st-queued: #a15c00;
+  --st-queued-bg: #fdf3e2;
+  --st-dispatched: #1f5fc9;
+  --st-dispatched-bg: #e7effc;
+  --st-out_for_delivery: #08707a;
+  --st-out_for_delivery-bg: #e2f5f6;
+  --st-completed: #1d7a3e;
+  --st-completed-bg: #e5f5ea;
+  --st-cancelled: #6b7280;
+  --st-cancelled-bg: #f0f1f3;
+  --st-rejected: #b42323;
+  --st-rejected-bg: #fcebeb;
+  --flag: #8a5a00;
+  --flag-bg: #fff6e0;
+
+  --radius: 8px;
+  --radius-sm: 5px;
+  --font: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg: #0f1218;
+    --surface: #161a22;
+    --surface-2: #1d222c;
+    --border: #272d39;
+    --border-strong: #353d4c;
+    --text: #e6e9ef;
+    --text-2: #a9b1c0;
+    --text-3: #7c8597;
+    --accent: #5b93f0;
+    --accent-hover: #77a6f3;
+    --accent-soft: #1a2740;
+    --danger: #ef6b6b;
+    --danger-soft: #3a1d20;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.5);
+    --st-received: #a9b1c0;
+    --st-received-bg: #232935;
+    --st-scheduled: #b79cf5;
+    --st-scheduled-bg: #2a2140;
+    --st-queued: #f0b352;
+    --st-queued-bg: #382a14;
+    --st-dispatched: #7eaaf5;
+    --st-dispatched-bg: #1b2a45;
+    --st-out_for_delivery: #5fd0d8;
+    --st-out_for_delivery-bg: #123336;
+    --st-completed: #6fd393;
+    --st-completed-bg: #15301f;
+    --st-cancelled: #8b93a3;
+    --st-cancelled-bg: #232833;
+    --st-rejected: #f08181;
+    --st-rejected-bg: #3a1d20;
+    --flag: #f0c060;
+    --flag-bg: #33290f;
+    color-scheme: dark;
+  }
+}
+:root[data-theme='dark'] {
+  --bg: #0f1218;
+  --surface: #161a22;
+  --surface-2: #1d222c;
+  --border: #272d39;
+  --border-strong: #353d4c;
+  --text: #e6e9ef;
+  --text-2: #a9b1c0;
+  --text-3: #7c8597;
+  --accent: #5b93f0;
+  --accent-hover: #77a6f3;
+  --accent-soft: #1a2740;
+  --danger: #ef6b6b;
+  --danger-soft: #3a1d20;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.5);
+  --st-received: #a9b1c0;
+  --st-received-bg: #232935;
+  --st-scheduled: #b79cf5;
+  --st-scheduled-bg: #2a2140;
+  --st-queued: #f0b352;
+  --st-queued-bg: #382a14;
+  --st-dispatched: #7eaaf5;
+  --st-dispatched-bg: #1b2a45;
+  --st-out_for_delivery: #5fd0d8;
+  --st-out_for_delivery-bg: #123336;
+  --st-completed: #6fd393;
+  --st-completed-bg: #15301f;
+  --st-cancelled: #8b93a3;
+  --st-cancelled-bg: #232833;
+  --st-rejected: #f08181;
+  --st-rejected-bg: #3a1d20;
+  --flag: #f0c060;
+  --flag-bg: #33290f;
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 13.5px/1.45 var(--font);
+  -webkit-font-smoothing: antialiased;
+}
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+code,
+.mono {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.muted {
+  color: var(--text-3);
+}
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Buttons & inputs */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s, border-color 0.12s;
+}
+.btn:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+.btn:focus-visible,
+.input:focus-visible,
+.select:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+.btn-danger {
+  color: var(--danger);
+  border-color: var(--border-strong);
+}
+.btn-danger:hover:not(:disabled) {
+  background: var(--danger-soft);
+}
+.btn-sm {
+  height: 26px;
+  padding: 0 9px;
+  font-size: 12.5px;
+}
+.btn-ghost {
+  border-color: transparent;
+  background: transparent;
+}
+.input,
+.select {
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+.select {
+  padding-right: 6px;
+}
+
+/* Cards */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.card-head h2 {
+  font-size: 14px;
+}
+.card-body {
+  padding: 14px 16px;
+}
+
+/* Key/value lists */
+.kv {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 16px;
+  margin: 0;
+}
+.kv dt {
+  color: var(--text-3);
+}
+.kv dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  background: var(--flag-bg);
+  color: var(--flag);
+}
+.chip-neutral {
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.spacer {
+  flex: 1;
+}
+.empty {
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--text-3);
+}

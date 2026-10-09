@@ -1,0 +1,101 @@
+# Order ingestion & dispatch system.
+#   docker compose up --build                      # everything, UI on http://localhost:8080
+#   docker compose up -d --scale api=3 --scale worker=4
+#   docker compose run --rm mock-webhook --fresh --count 2000 --rate 50 --burst 300
+name: order-system
+
+x-backend: &backend
+  build:
+    context: .
+    dockerfile: backend/Dockerfile
+  image: order-system/backend:dev
+  restart: unless-stopped
+  environment: &backend-env
+    DATABASE_URL: postgres://orders:orders@db:5432/orders?sslmode=disable
+    MOCK_API_URL: http://mock-api:8090
+    ROBOT_URL: http://mock-api:8090/robot/dispatch
+    SLOT_TZ: ${SLOT_TZ:-America/New_York}
+    MEAL_TIMES: ${MEAL_TIMES:-breakfast=08:00,lunch=12:00,dinner=18:00}
+    LEAD_MINUTES: ${LEAD_MINUTES:-30}
+  depends_on:
+    db:
+      condition: service_healthy
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: orders
+      POSTGRES_PASSWORD: orders
+      POSTGRES_DB: orders
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orders -d orders"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # Stateless HTTP: ingest edge + read APIs. Scale freely.
+  api:
+    <<: *backend
+    command: ["--roles=api"]
+    healthcheck:
+      test: ["CMD", "/app/server", "healthcheck", "http://localhost:8080/readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Inbox workers + dispatch. Poller and scheduler are leader-elected,
+  # so any number of replicas is safe (exactly one polls/schedules).
+  worker:
+    <<: *backend
+    command: ["--roles=workers,dispatch,poller,scheduler"]
+    environment:
+      <<: *backend-env
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
+      POLL_INTERVAL: ${POLL_INTERVAL:-5s}
+    healthcheck:
+      test: ["CMD", "/app/server", "healthcheck", "http://localhost:8080/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Replays api_responses.jsonl (one response every MOCK_API_STEP) and plays the robot.
+  mock-api:
+    <<: *backend
+    depends_on: []
+    entrypoint: ["/app/mock-api"]
+    command: ["--file=/app/sample-data/api_responses.jsonl", "--step=${MOCK_API_STEP:-3s}", "--robot-fail-rate=${ROBOT_FAIL_RATE:-0.05}"]
+    healthcheck:
+      test: ["CMD", "/app/mock-api", "healthcheck", "http://localhost:8090/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    image: order-system/frontend:dev
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8080}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # On demand only: bursty webhook traffic against the real HTTP edge.
+  mock-webhook:
+    <<: *backend
+    profiles: ["tools"]
+    restart: "no"
+    # No depends_on on purpose: `compose run` would otherwise re-apply the
+    # default scale to api and undo `--scale api=N`. Start the stack first.
+    depends_on: []
+    entrypoint: ["/app/mock-webhook", "--url=http://api:8080/api/ingest/webhook", "--file=/app/sample-data/webhook_orders.jsonl"]
+    command: []
+
+volumes:
+  pgdata:
