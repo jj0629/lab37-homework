@@ -1,35 +1,56 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api/client'
 import type { OrderList, OrderQuery, OrderSummary, Stats } from '../api/types'
 import DataTable, { type Column } from '../components/DataTable.vue'
-import StatTile from '../components/StatTile.vue'
+import MultiSelect, { type MultiSelectOption } from '../components/MultiSelect.vue'
 import StatusBadge from '../components/StatusBadge.vue'
 import { dataVersion } from '../composables/useActions'
 import { usePolling } from '../composables/usePolling'
-import { FLAG_LABEL, SOURCE_LABEL, customer, fmtAgo, fmtMoney, fmtTime, label, shortId } from '../format'
+import {
+  FILTER_KEYS,
+  PAGE_SIZES,
+  hasActiveFilters,
+  loadStoredPageSize,
+  parseList,
+  resolvePageSize,
+  serializeList,
+  storePageSize,
+} from '../filters'
+import { FLAG_LABEL, SOURCE_LABEL, STATUS_LABEL, STATUS_ORDER, customer, fmtAgo, fmtMoney, fmtTime, label, shortId } from '../format'
 
 const route = useRoute()
 const router = useRouter()
+const storedPageSize = ref(loadStoredPageSize())
 
 // The URL is the source of truth for filters, so views are linkable and
 // the header's "Download CSV" exports exactly what is on screen.
+// Multi-value filters are comma-separated (?status=queued,dispatched).
+const rq = computed(() => route.query as Record<string, string | undefined>)
+
+// Legacy ?needs_review=true links show up as the "Needs review" flag.
+const selectedFlags = computed(() => {
+  const f = parseList(rq.value.flags)
+  if (rq.value.needs_review === 'true' && !f.includes('needs_review')) f.unshift('needs_review')
+  return f
+})
 const query = computed<OrderQuery>(() => {
-  const q = route.query as Record<string, string | undefined>
+  const q = rq.value
   return {
     status: q.status,
     source: q.source,
     kind: q.kind,
-    needs_review: q.needs_review,
+    flags: serializeList(selectedFlags.value),
+    needs_review: q.needs_review === 'false' ? 'false' : undefined,
     q: q.q,
     sort: q.sort ?? 'id',
     dir: q.dir ?? 'desc',
-    page: Number(q.page ?? 1),
-    page_size: 50,
+    page: Math.max(1, Number(q.page ?? 1) || 1),
+    page_size: resolvePageSize(q.page_size, storedPageSize.value),
   }
 })
-function setQuery(patch: Partial<Record<keyof OrderQuery, string | number | undefined>>, resetPage = true) {
+function setQuery(patch: Record<string, string | number | undefined>, resetPage = true) {
   const next: Record<string, string> = {}
   const merged = { ...route.query, ...patch, ...(resetPage ? { page: undefined } : {}) } as Record<string, unknown>
   for (const [k, v] of Object.entries(merged)) if (v !== undefined && v !== '' && v !== null) next[k] = String(v)
@@ -54,26 +75,66 @@ async function load() {
 const { refresh, lastError } = usePolling(load, 5000, live)
 watch([query, dataVersion], () => refresh())
 
-const search = ref((route.query.q as string) ?? '')
+const search = ref(rq.value.q ?? '')
 let t: number | undefined
 watch(search, (v) => {
   clearTimeout(t)
+  if ((rq.value.q ?? '') === v.trim()) return
   t = window.setTimeout(() => setQuery({ q: v.trim() || undefined }), 300)
 })
+// A pending debounce must not rewrite the URL of the page we navigated to.
+onBeforeUnmount(() => clearTimeout(t))
+// Keep the box in sync when the URL changes underneath it (back/forward, Reset).
+watch(
+  () => rq.value.q,
+  (v) => {
+    if ((v ?? '') !== search.value.trim()) search.value = v ?? ''
+  },
+)
 
-const tabs = computed(() => {
-  const by = stats.value?.by_status ?? {}
-  return [
-    { key: '', label: 'All', n: stats.value?.total ?? 0 },
-    { key: 'scheduled', label: 'Scheduled', n: by.scheduled ?? 0 },
-    { key: 'queued', label: 'Queued', n: by.queued ?? 0 },
-    { key: 'dispatched', label: 'Dispatched', n: by.dispatched ?? 0 },
-    { key: 'out_for_delivery', label: 'Out for delivery', n: by.out_for_delivery ?? 0 },
-    { key: 'completed', label: 'Completed', n: by.completed ?? 0 },
-    { key: 'cancelled', label: 'Cancelled', n: by.cancelled ?? 0 },
-    { key: 'rejected', label: 'Rejected', n: by.rejected ?? 0 },
-  ]
-})
+// ---- filter bar ----
+const statusOptions = computed<MultiSelectOption[]>(() =>
+  STATUS_ORDER.map((s) => ({
+    value: s,
+    label: STATUS_LABEL[s],
+    count: stats.value ? (stats.value.by_status[s] ?? 0) : undefined,
+  })),
+)
+const sourceOptions: MultiSelectOption[] = Object.entries(SOURCE_LABEL).map(([value, label]) => ({ value, label }))
+const kindOptions: MultiSelectOption[] = [
+  { value: 'realtime', label: 'Real-time' },
+  { value: 'scheduled', label: 'Scheduled' },
+]
+const flagOptions: MultiSelectOption[] = [
+  { value: 'needs_review', label: 'Needs review' },
+  ...Object.entries(FLAG_LABEL).map(([value, label]) => ({ value, label })),
+]
+
+const selStatus = computed(() => parseList(rq.value.status))
+const selSource = computed(() => parseList(rq.value.source))
+const selKind = computed(() => parseList(rq.value.kind))
+
+function setList(key: 'status' | 'source' | 'kind', values: string[]) {
+  setQuery({ [key]: serializeList(values) })
+}
+function setFlags(values: string[]) {
+  setQuery({ flags: serializeList(values), needs_review: undefined })
+}
+
+// Reset clears every filter and the search box, but keeps sort and page size.
+const filtered = computed(() => hasActiveFilters(rq.value) || search.value.trim() !== '')
+function resetFilters() {
+  clearTimeout(t)
+  search.value = ''
+  setQuery(Object.fromEntries(FILTER_KEYS.map((k) => [k, undefined])))
+}
+
+function setPageSize(e: Event) {
+  const n = Number((e.target as HTMLSelectElement).value)
+  storePageSize(n)
+  storedPageSize.value = n
+  setQuery({ page_size: n })
+}
 
 const columns: Column[] = [
   { key: 'id', label: 'ID', sortable: true, width: '70px' },
@@ -96,57 +157,41 @@ function open(o: OrderSummary, ev: MouseEvent) {
   else router.push(`/orders/${o.id}`)
 }
 
+// Needs-review alert: large, always visible while any order is flagged.
+const reviewCount = computed(() => stats.value?.needs_review ?? 0)
+const showingReview = computed(() => selectedFlags.value.length === 1 && selectedFlags.value[0] === 'needs_review')
+function toggleReviewFilter() {
+  setFlags(showingReview.value ? [] : ['needs_review'])
+}
+
 const pages = computed(() => (list.value ? Math.max(1, Math.ceil(list.value.total / list.value.page_size)) : 1))
 const now = computed(() => (list.value, Date.now()))
-const scheduledNote = computed(() => {
-  const s = stats.value
-  return s ? `${s.by_status.scheduled ?? 0} waiting for a meal slot` : ''
-})
 </script>
 
 <template>
-  <section class="tiles">
-    <StatTile label="All orders" :value="stats?.total ?? '—'" :hint="`${stats?.by_source.webhook ?? 0} webhook · ${stats?.by_source.api ?? 0} API · ${stats?.by_source.csv ?? 0} CSV`" />
-    <StatTile label="Scheduled" tone="scheduled" :value="stats?.by_status.scheduled ?? 0" :hint="scheduledNote" clickable :active="query.status === 'scheduled'" @click="setQuery({ status: query.status === 'scheduled' ? undefined : 'scheduled' })" />
-    <StatTile label="Queued" tone="queued" :value="stats?.by_status.queued ?? 0" hint="waiting for robot" clickable :active="query.status === 'queued'" @click="setQuery({ status: query.status === 'queued' ? undefined : 'queued' })" />
-    <StatTile label="Dispatched" tone="dispatched" :value="stats?.by_status.dispatched ?? 0" :hint="`${stats?.outbox.pending ?? 0} robot msgs pending`" clickable :active="query.status === 'dispatched'" @click="setQuery({ status: query.status === 'dispatched' ? undefined : 'dispatched' })" />
-    <StatTile label="Out for delivery" tone="out_for_delivery" :value="stats?.by_status.out_for_delivery ?? 0" clickable :active="query.status === 'out_for_delivery'" @click="setQuery({ status: query.status === 'out_for_delivery' ? undefined : 'out_for_delivery' })" />
-    <StatTile label="Completed" tone="completed" :value="stats?.by_status.completed ?? 0" clickable :active="query.status === 'completed'" @click="setQuery({ status: query.status === 'completed' ? undefined : 'completed' })" />
-    <StatTile label="Needs review" tone="queued" :value="stats?.needs_review ?? 0" hint="flagged, not blocked" clickable :active="query.needs_review === 'true'" @click="setQuery({ needs_review: query.needs_review === 'true' ? undefined : 'true' })" />
-    <StatTile label="Inbox backlog" tone="received" :value="stats?.inbox.pending ?? 0" :hint="`${stats?.throughput.processed_last_min ?? 0} processed / min`" />
+  <section v-if="reviewCount > 0" class="review-alert" role="status" aria-live="polite">
+    <svg class="review-icon" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M10.3 3.9 2.4 17.6A2 2 0 0 0 4.1 20.6h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" /><path d="M12 9v4m0 4h.01" />
+    </svg>
+    <div class="review-text">
+      <div class="review-title">
+        <span class="num">{{ reviewCount.toLocaleString() }}</span> {{ reviewCount === 1 ? 'order needs' : 'orders need' }} review
+      </div>
+      <div class="review-sub">Flagged for a person to check: item-change requests, changed instructions, passed meal slots, ID conflicts. They still dispatch.</div>
+    </div>
+    <button class="btn review-btn" type="button" :aria-pressed="showingReview" @click="toggleReviewFilter">
+      {{ showingReview ? 'Show all orders' : 'Show them' }}
+    </button>
   </section>
 
   <div class="card">
-    <div class="tabs" role="tablist">
-      <button
-        v-for="t in tabs"
-        :key="t.key"
-        role="tab"
-        class="tab"
-        :class="{ on: (query.status ?? '') === t.key }"
-        :aria-selected="(query.status ?? '') === t.key"
-        @click="setQuery({ status: t.key || undefined })"
-      >
-        {{ t.label }} <span class="n num">{{ t.n }}</span>
-      </button>
-    </div>
     <div class="filters">
-      <input v-model="search" class="input search" type="search" placeholder="Search name, order id, restaurant…" aria-label="Search" />
-      <select class="select" :value="query.source ?? ''" aria-label="Source" @change="setQuery({ source: ($event.target as HTMLSelectElement).value || undefined })">
-        <option value="">All sources</option>
-        <option value="webhook">Webhook</option>
-        <option value="api">Polling API</option>
-        <option value="csv">CSV upload</option>
-      </select>
-      <select class="select" :value="query.kind ?? ''" aria-label="Kind" @change="setQuery({ kind: ($event.target as HTMLSelectElement).value || undefined })">
-        <option value="">Real-time + scheduled</option>
-        <option value="realtime">Real-time</option>
-        <option value="scheduled">Scheduled</option>
-      </select>
-      <label class="check">
-        <input type="checkbox" :checked="query.needs_review === 'true'" @change="setQuery({ needs_review: ($event.target as HTMLInputElement).checked ? 'true' : undefined })" />
-        Needs review
-      </label>
+      <input v-model="search" class="input search" type="search" placeholder="Search name, order id, restaurant…" aria-label="Search orders" />
+      <MultiSelect label="Status" :options="statusOptions" :model-value="selStatus" @update:model-value="setList('status', $event)" />
+      <MultiSelect label="Source" :options="sourceOptions" :model-value="selSource" @update:model-value="setList('source', $event)" />
+      <MultiSelect label="Type" :options="kindOptions" :model-value="selKind" @update:model-value="setList('kind', $event)" />
+      <MultiSelect label="Flags" :options="flagOptions" :model-value="selectedFlags" @update:model-value="setFlags" />
+      <button class="btn btn-ghost reset" type="button" :disabled="!filtered" @click="resetFilters">Reset</button>
       <span class="spacer" />
       <span v-if="lastError" class="err">{{ lastError }}</span>
       <button class="btn btn-sm live" :class="{ on: live }" type="button" :aria-pressed="live" @click="live = !live">
@@ -196,57 +241,75 @@ const scheduledNote = computed(() => {
     <div class="pager">
       <span class="muted num">{{ list ? `${list.total.toLocaleString()} orders` : '' }}</span>
       <span class="spacer" />
-      <button class="btn btn-sm" :disabled="query.page! <= 1" @click="setQuery({ page: query.page! - 1 }, false)">Previous</button>
-      <span class="num">Page {{ query.page }} of {{ pages }}</span>
-      <button class="btn btn-sm" :disabled="query.page! >= pages" @click="setQuery({ page: query.page! + 1 }, false)">Next</button>
+      <label class="size">
+        <span class="muted">Rows per page</span>
+        <select class="select select-sm num" :value="query.page_size" @change="setPageSize">
+          <option v-for="n in PAGE_SIZES" :key="n" :value="n">{{ n }}</option>
+        </select>
+      </label>
+      <div class="nav">
+        <button class="btn btn-sm" :disabled="query.page! <= 1" @click="setQuery({ page: query.page! - 1 }, false)">Previous</button>
+        <span class="num">Page {{ query.page }} of {{ pages }}</span>
+        <button class="btn btn-sm" :disabled="query.page! >= pages" @click="setQuery({ page: query.page! + 1 }, false)">Next</button>
+      </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.tiles {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
-  gap: 10px;
-  margin-bottom: 16px;
-}
-.tabs {
+.review-alert {
   display: flex;
-  gap: 2px;
-  padding: 0 10px;
-  border-bottom: 1px solid var(--border);
-  overflow-x: auto;
-}
-.tab {
-  height: 40px;
-  padding: 0 10px;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  background: none;
-  color: var(--text-2);
-  font: inherit;
-  font-weight: 500;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.tab:hover {
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 16px;
+  padding: 16px 20px;
+  border: 1px solid color-mix(in srgb, var(--flag) 35%, transparent);
+  border-left: 5px solid var(--flag);
+  border-radius: var(--radius);
+  background: var(--flag-bg);
   color: var(--text);
+  box-shadow: var(--shadow);
 }
-.tab.on {
-  color: var(--accent);
-  border-bottom-color: var(--accent);
+.review-icon {
+  flex: none;
+  color: var(--flag);
 }
-.tab .n {
-  margin-left: 3px;
-  padding: 1px 6px;
-  border-radius: 999px;
-  background: var(--surface-2);
-  color: var(--text-3);
-  font-size: 11px;
+.review-text {
+  flex: 1;
+  min-width: 0;
 }
-.tab.on .n {
-  background: var(--accent-soft);
-  color: var(--accent);
+.review-title {
+  font-size: 18px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+.review-title .num {
+  color: var(--flag);
+}
+.review-sub {
+  margin-top: 2px;
+  color: var(--text-2);
+}
+.review-btn {
+  flex: none;
+  border-color: color-mix(in srgb, var(--flag) 50%, transparent);
+  font-weight: 600;
+}
+.review-btn[aria-pressed='true'],
+.review-btn[aria-pressed='true']:hover:not(:disabled) {
+  background: var(--flag);
+  border-color: var(--flag);
+  color: var(--surface);
+}
+@media (max-width: 640px) {
+  .review-alert {
+    flex-wrap: wrap;
+    padding: 14px 16px;
+  }
+  .review-btn {
+    width: 100%;
+    justify-content: center;
+  }
 }
 .filters {
   display: flex;
@@ -257,15 +320,14 @@ const scheduledNote = computed(() => {
   border-bottom: 1px solid var(--border);
 }
 .search {
-  width: 260px;
-  max-width: 100%;
+  flex: 0 1 260px;
+  min-width: 180px;
 }
-.check {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+.reset {
   color: var(--text-2);
-  cursor: pointer;
+}
+.reset:hover:not(:disabled) {
+  color: var(--text);
 }
 .err {
   color: var(--danger);
@@ -305,8 +367,36 @@ const scheduledNote = computed(() => {
 .pager {
   display: flex;
   align-items: center;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 10px 16px;
   padding: 10px 12px;
   border-top: 1px solid var(--border);
+}
+.size,
+.nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.select-sm {
+  height: 26px;
+  padding: 0 4px 0 7px;
+  font-size: 12.5px;
+}
+@media (max-width: 640px) {
+  .search {
+    flex-basis: 100%;
+  }
+  .filters > .ms {
+    flex: 1 1 calc(50% - 4px);
+  }
+  .filters > .ms :deep(.ms-btn) {
+    width: 100%;
+    max-width: none;
+    justify-content: space-between;
+  }
+  .pager .spacer {
+    display: none;
+  }
 }
 </style>

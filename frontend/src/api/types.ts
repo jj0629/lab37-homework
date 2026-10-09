@@ -134,6 +134,8 @@ export interface OrderQuery {
   status?: string
   source?: string
   kind?: string
+  /** comma-separated; "needs_review" is a pseudo-flag for the needs_review column */
+  flags?: string
   needs_review?: string
   q?: string
   sort?: string

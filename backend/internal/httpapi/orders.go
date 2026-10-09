@@ -86,10 +86,34 @@ func filters(r *http.Request) (string, []any) {
 		add("o.source = ANY($%d)", pq.Array(strings.Split(v, ",")))
 	}
 	if v := q.Get("kind"); v != "" {
-		add("o.kind = $%d", v)
+		add("o.kind = ANY($%d)", pq.Array(strings.Split(v, ",")))
 	}
 	if v := q.Get("needs_review"); v == "true" || v == "false" {
 		add("o.needs_review = $%d", v == "true")
+	}
+	// flags: comma-separated, OR-ed. "needs_review" refers to the boolean
+	// column; anything else must be present in the o.flags array.
+	if v := q.Get("flags"); v != "" {
+		var flags []string
+		review := false
+		for _, f := range strings.Split(v, ",") {
+			if f = strings.TrimSpace(f); f == "needs_review" {
+				review = true
+			} else if f != "" {
+				flags = append(flags, f)
+			}
+		}
+		var or []string
+		if review {
+			or = append(or, "o.needs_review")
+		}
+		if len(flags) > 0 {
+			args = append(args, pq.Array(flags))
+			or = append(or, fmt.Sprintf("o.flags && $%d::text[]", len(args)))
+		}
+		if len(or) > 0 {
+			where = append(where, "("+strings.Join(or, " OR ")+")")
+		}
 	}
 	if v := strings.TrimSpace(q.Get("q")); v != "" {
 		args = append(args, "%"+v+"%")
